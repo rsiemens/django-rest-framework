@@ -780,7 +780,11 @@ def raise_errors_on_nested_writes(method_name, serializer, validated_data):
     * Automatically create a profile instance.
     """
     ModelClass = serializer.Meta.model
-    model_field_info = model_meta.get_field_info(ModelClass)
+    # model_field_info may be cached on the serializer.__class__ already
+    if hasattr(serializer, '_get_field_info') and callable(serializer._get_field_info):
+        model_field_info = serializer._get_field_info(ModelClass)
+    else:
+        model_field_info = model_meta.get_field_info(ModelClass)
 
     # Ensure we don't have a writable nested field. For example:
     #
@@ -927,7 +931,7 @@ class ModelSerializer(Serializer):
         # Remove many-to-many relationships from validated_data.
         # They are not valid arguments to the default `.create()` method,
         # as they require that the instance has already been saved.
-        info = model_meta.get_field_info(ModelClass)
+        info = self._get_field_info(ModelClass)
         many_to_many = {}
         for field_name, relation_info in info.relations.items():
             if relation_info.to_many and (field_name in validated_data):
@@ -965,7 +969,7 @@ class ModelSerializer(Serializer):
 
     def update(self, instance, validated_data):
         raise_errors_on_nested_writes('update', self, validated_data)
-        info = model_meta.get_field_info(instance)
+        info = self._get_field_info(instance)
 
         # Simply set each attribute on the instance, and then save it.
         # Note that unlike `.create()` we don't need to treat many-to-many
@@ -1023,7 +1027,7 @@ class ModelSerializer(Serializer):
             assert depth <= 10, "'depth' may not be greater than 10."
 
         # Retrieve metadata about fields & relationships on the model class.
-        info = model_meta.get_field_info(model)
+        info = self._get_field_info(model)
         field_names = self.get_field_names(declared_fields, info)
 
         # Determine any extra field arguments and hidden fields that
@@ -1540,7 +1544,7 @@ class ModelSerializer(Serializer):
         * unique_for_month
         * unique_for_year
         """
-        info = model_meta.get_field_info(self.Meta.model)
+        info = self._get_field_info(self.Meta.model)
         default_manager = self.Meta.model._default_manager
         field_names = [field.source for field in self.fields.values()]
 
@@ -1572,6 +1576,18 @@ class ModelSerializer(Serializer):
                 validators.append(validator)
 
         return validators
+
+    def _get_field_info(self, model):
+        """
+        Proxy to `model_meta.get_field_info` that will cache the results on the
+        class. We wan't to cache this since it's expensive to generate and is
+        needed for serializing, creating, and updating.
+        """
+        field_info = getattr(self.__class__, '_field_info', None)
+        if field_info is None:
+            field_info = model_meta.get_field_info(model)
+            setattr(self.__class__, '_field_info', field_info)
+        return field_info
 
 
 class HyperlinkedModelSerializer(ModelSerializer):
